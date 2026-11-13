@@ -28,8 +28,8 @@ MAX_BUFFER_SIZE = 4096
 class TES3600Session:
     """Gestiona la inicialización, el sondeo y la recepción del TES3600."""
 
-    def __init__(self, on_block=None):
-        self.link = TES3600Serial()
+    def __init__(self, on_block=None, link=None):
+        self.link = link or TES3600Serial()
         self.detener = threading.Event()
         self.tes_listo = threading.Event()
         self.write_lock = threading.Lock()
@@ -168,8 +168,9 @@ class TES3600Session:
 
             self.detener.wait(REQUEST_INTERVAL)
 
-    def iniciar(self):
-        """Abre el puerto e inicia los hilos de comunicación."""
+    def iniciar(self, enviar_inicio=True):
+        """Inicia los hilos de comunicación sobre el puerto conectado."""
+
         self.link.connect()
 
         hilo_rx = threading.Thread(
@@ -180,7 +181,11 @@ class TES3600Session:
         hilo_rx.start()
         self.threads.append(hilo_rx)
 
-        self.enviar(bytes([COMMAND_START]))
+        if enviar_inicio:
+            self.enviar(bytes([COMMAND_START]))
+        else:
+            # El manager ya recibió STATUS_READY durante el handshake.
+            self.tes_listo.set()
 
         for target, name in (
             (self._polling_loop, "tes-polling"),

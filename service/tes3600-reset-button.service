@@ -1,0 +1,14 @@
+[Unit]
+Description=TES3600 Physical Reset Button
+After=multi-user.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/user/tes3600_server
+ExecStart=/home/user/tes3600_server/.venv/bin/python /home/user/tes3600_server/hardware/reset_button.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

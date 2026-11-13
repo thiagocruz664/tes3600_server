@@ -1,53 +1,113 @@
 """Punto de entrada del servidor TES3600."""
 
-import time
+import logging
+import threading
 
 from server.tcp_server import TCPServer
-from tes3600.session import TES3600Session
+from tes3600.serial_manager import SerialManager
+
+from hardware.gpio_manager import GPIOManager
+
+logger = logging.getLogger(__name__)
+
+TCP_RETRY_INTERVAL = 5.0
 
 
 def main():
-    tcp_server = TCPServer(host="0.0.0.0", port=9000)
-    session = None
+    gpio = GPIOManager()
+
+    tcp_server = TCPServer(
+        host="0.0.0.0",
+        port=9000,
+        on_state=gpio.set_tcp_state,
+    )
 
     def procesar_bloque(bloque):
-        """Mostrar y retransmitir una trama sin modificarla."""
-        timestamp = time.perf_counter()
-
-#        print()
-#        print(
-#            f"[{timestamp:.6f}] "
-#            f"TES -> TCP ({len(bloque)} bytes):"
-#        )
-#        print(bloque.hex(" ").upper())
-
+        """Retransmite las tramas recibidas a los clientes TCP."""
         tcp_server.broadcast(bloque)
 
+    manager = SerialManager(
+        on_block=procesar_bloque,
+        on_state=gpio.set_serial_state,
+    )
+
+    tcp_retry_stop = threading.Event()
+
+    def recuperar_tcp():
+        """Reintenta iniciar el servidor TCP cuando no está disponible."""
+
+        while not tcp_retry_stop.is_set():
+
+            if tcp_server.server_socket is None:
+
+                try:
+                    tcp_server.start()
+
+                except OSError:
+                    logger.exception(
+                        "No se pudo iniciar el servidor TCP. "
+                        "Nuevo intento en %.1f segundos.",
+                        TCP_RETRY_INTERVAL,
+                    )
+
+            tcp_retry_stop.wait(TCP_RETRY_INTERVAL)
+
+    tcp_retry_thread = None
+
     try:
-        tcp_server.start()
+        try:
+            tcp_server.start()
 
-        session = TES3600Session(on_block=procesar_bloque)
-        session.iniciar()
+        except OSError:
+            logger.exception(
+                "Error inicializando TCP. "
+                "Se continuará intentando."
+            )
 
-        print("TES3600 conectado.")
-        print("Esperando mediciones y clientes TCP.")
-        print("Ctrl+C para detener.")
-        print()
+        tcp_retry_thread = threading.Thread(
+            target=recuperar_tcp,
+            name="tcp-recovery",
+            daemon=True,
+        )
+        tcp_retry_thread.start()
 
-        while not session.detener.wait(1.0):
-            pass
+        logger.info("Servidor TES3600 iniciado.")
+        logger.info("Buscando dispositivo serial.")
+
+        manager.run()
 
     except KeyboardInterrupt:
-        print("\nDeteniendo el servidor...")
+        logger.info("Interrupción solicitada.")
+
+    except Exception:
+        logger.exception("Error irrecuperable en el servidor.")
+        raise
 
     finally:
-        if session is not None:
-            session.detener_sesion()
+        logger.info("Iniciando cierre del servidor.")
+
+        manager.stop()
+
+        tcp_retry_stop.set()
+
+        if tcp_retry_thread is not None:
+            tcp_retry_thread.join(timeout=2.0)
 
         tcp_server.stop()
-        print("Servidor finalizado.")
+        gpio.close()
+
+        logger.info("Servidor finalizado.")
 
 
 if __name__ == "__main__":
-    main()
 
+    logging.basicConfig(
+        level=logging.INFO,
+        format=(
+            "%(asctime)s "
+            "[%(levelname)s] "
+            "%(name)s: %(message)s"
+        ),
+    )
+
+    main()

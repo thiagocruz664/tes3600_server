@@ -1,0 +1,21 @@
+[Unit]
+Description=TES3600 TCP and Serial Server
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+
+User=user
+WorkingDirectory=/home/user/tes3600_server
+
+ExecStart=/home/user/tes3600_server/.venv/bin/python /home/user/tes3600_server/main.py
+
+Restart=always
+RestartSec=5
+
+KillSignal=SIGINT
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target
