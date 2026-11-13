@@ -1,4 +1,3 @@
-
 """Descubrimiento, validación y reconexión del TES3600."""
 
 import logging
@@ -11,6 +10,8 @@ from config import (
     SERIAL_PORT,
     COMMAND_START,
     STATUS_READY,
+    COMMAND_POLL,
+    POLL_INTERVAL,
 )
 from tes3600.serial_link import TES3600Serial
 from tes3600.session import TES3600Session
@@ -19,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 SCAN_INTERVAL = 1.0
 VALIDATION_TIMEOUT = 0.75
+INITIAL_POLL_DELAY = 0.095
 
 WAITING_DEVICE = "WAITING_DEVICE"
 VALIDATING_DEVICE = "VALIDATING_DEVICE"
@@ -64,55 +66,71 @@ class SerialManager:
         return ports
 
     def _validar_dispositivo(self, port_name):
-        """
-        Comprueba si el dispositivo conectado responde al handshake
-        inicial del TES3600.
-
-        Devuelve el enlace serie abierto si la validación es correcta.
-        """
-
         link = TES3600Serial(port=port_name)
 
         try:
             link.connect()
-
-            # Solicitar inicio de comunicación.
             link.send(COMMAND_START)
 
-            deadline = time.monotonic() + VALIDATION_TIMEOUT
+            # Lectura no bloqueante durante la validación.
+            original_timeout = link.connection.timeout
+            link.connection.timeout = 0
+
+            start_time = time.monotonic()
+            deadline = start_time + VALIDATION_TIMEOUT
+            next_poll = start_time + INITIAL_POLL_DELAY
+
+            received = bytearray()
+            polls_sent = 0
 
             while time.monotonic() < deadline:
                 if self.detener.is_set():
                     break
 
+                now = time.monotonic()
+
+                # Enviar el primer sondeo a los 95 ms
+                # y continuar con el intervalo configurado.
+                if now >= next_poll:
+                    link.send(COMMAND_POLL)
+                    polls_sent += 1
+
+                    next_poll += POLL_INTERVAL
+
+                    if next_poll <= now:
+                        next_poll = now + POLL_INTERVAL
+
                 response = link.receive(1)
 
                 if response:
-                    if response[0] == STATUS_READY:
+                    received.extend(response)
+
+                    if STATUS_READY in response:
+                        link.connection.timeout = original_timeout
+
                         logger.info(
-                            "TES3600 validado en %s.",
+                            "TES3600 validado en %s (%d sondeos).",
                             port_name,
+                            polls_sent,
                         )
+
                         return link
 
-                    # Respuesta inesperada: descartar candidato.
-                    logger.debug(
-                        "Respuesta inválida en %s: %s",
-                        port_name,
-                        response.hex(" ").upper(),
-                    )
-                    break
+                else:
+                    time.sleep(0.001)
 
-            logger.debug(
-                "El dispositivo %s no superó la validación.",
+            logger.warning(
+                "No se validó el dispositivo en %s. "
+                "Sondeos enviados: %d. Respuesta: %s",
                 port_name,
+                polls_sent,
+                received.hex(" ").upper() if received else "ninguna",
             )
 
         except Exception:
-            logger.debug(
-                "No se pudo validar el puerto %s.",
+            logger.exception(
+                "Error durante la validación del puerto %s.",
                 port_name,
-                exc_info=True,
             )
 
         link.disconnect()
