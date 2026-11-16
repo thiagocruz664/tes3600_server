@@ -7,6 +7,7 @@ from server.tcp_server import TCPServer
 from tes3600.serial_manager import SerialManager
 
 from hardware.gpio_manager import GPIOManager
+from storage.database import MeasurementDatabase
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +16,7 @@ TCP_RETRY_INTERVAL = 5.0
 
 def main():
     gpio = GPIOManager()
+    database = MeasurementDatabase()
 
     tcp_server = TCPServer(
         host="0.0.0.0",
@@ -23,7 +25,16 @@ def main():
     )
 
     def procesar_bloque(bloque):
-        """Retransmite las tramas recibidas a los clientes TCP."""
+        """Almacena la medición y luego la retransmite por TCP."""
+
+        try:
+            database.save_measurement(bloque)
+
+        except Exception:
+            logger.exception(
+                "Error al guardar la medición en la base de datos."
+            )
+
         tcp_server.broadcast(bloque)
 
     manager = SerialManager(
@@ -94,6 +105,7 @@ def main():
             tcp_retry_thread.join(timeout=2.0)
 
         tcp_server.stop()
+        database.close()
         gpio.close()
 
         logger.info("Servidor finalizado.")

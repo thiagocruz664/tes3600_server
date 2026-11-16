@@ -183,7 +183,11 @@ class TCPServer:
         if self.detener.is_set():
             return
 
-        message = encode_frame(frame)
+        try:
+            message = encode_frame(frame)
+        except (TypeError, ValueError) as exc:
+            logger.warning("No se pudo codificar la trama para broadcast: %s", exc)
+            return
 
         with self.clients_lock:
             clients = tuple(self.clients)
