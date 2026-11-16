@@ -5,9 +5,9 @@ import threading
 
 from server.tcp_server import TCPServer
 from tes3600.serial_manager import SerialManager
-
 from hardware.gpio_manager import GPIOManager
 from storage.database import MeasurementDatabase
+from server.history_server import HistoryTCPServer
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +17,7 @@ TCP_RETRY_INTERVAL = 5.0
 def main():
     gpio = GPIOManager()
     database = MeasurementDatabase()
+    history_server = HistoryTCPServer(database)
 
     tcp_server = TCPServer(
         host="0.0.0.0",
@@ -29,7 +30,6 @@ def main():
 
         try:
             database.save_measurement(bloque)
-
         except Exception:
             logger.exception(
                 "Error al guardar la medición en la base de datos."
@@ -68,11 +68,17 @@ def main():
     try:
         try:
             tcp_server.start()
-
         except OSError:
             logger.exception(
                 "Error inicializando TCP. "
                 "Se continuará intentando."
+            )
+
+        try:
+            history_server.start()
+        except OSError:
+            logger.exception(
+                "No se pudo iniciar el servidor histórico."
             )
 
         tcp_retry_thread = threading.Thread(
@@ -86,10 +92,8 @@ def main():
         logger.info("Buscando dispositivo serial.")
 
         manager.run()
-
     except KeyboardInterrupt:
         logger.info("Interrupción solicitada.")
-
     except Exception:
         logger.exception("Error irrecuperable en el servidor.")
         raise
@@ -105,6 +109,7 @@ def main():
             tcp_retry_thread.join(timeout=2.0)
 
         tcp_server.stop()
+        history_server.stop()
         database.close()
         gpio.close()
 

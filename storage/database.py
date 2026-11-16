@@ -88,6 +88,48 @@ class MeasurementDatabase:
             and frame[-1] == FRAME_END
         )
 
+    def iter_measurements(self, start_ms, end_ms, batch_size=256):
+        """Devuelve mediciones ordenadas cronológicamente por lotes."""
+
+        if not isinstance(start_ms, int) or not isinstance(end_ms, int):
+            raise TypeError("Los timestamps deben ser enteros.")
+
+        if start_ms > end_ms:
+            raise ValueError("El período solicitado no es válido.")
+
+        if batch_size < 1:
+            raise ValueError("El tamaño del lote debe ser positivo.")
+
+        connection = sqlite3.connect(
+            f"{self.database_path.resolve().as_uri()}?mode=ro",
+            uri=True,
+            timeout=5.0,
+        )
+
+        try:
+            cursor = connection.execute(
+                """
+                SELECT timestamp_ms, frame
+                FROM measurements
+                WHERE timestamp_ms >= ?
+                  AND timestamp_ms <= ?
+                ORDER BY timestamp_ms ASC, id ASC
+                """,
+                (start_ms, end_ms),
+            )
+
+            while True:
+                rows = cursor.fetchmany(batch_size)
+
+                if not rows:
+                    break
+
+                for timestamp_ms, frame in rows:
+                    yield timestamp_ms, bytes(frame)
+
+        finally:
+            connection.close()
+
     def save_measurement(self, frame):
         """Guarda una medición válida con timestamp Unix en ms."""
 
